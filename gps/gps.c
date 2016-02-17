@@ -8,25 +8,24 @@
 #include <fcntl.h>
 #include <termios.h>
 
-//#define  dev  "/dev/ttyS0"
+#include <sqlite3.h>
+
 #define  BUFF_SIZE 512
-#define  MAX_COM_NUM 3
 
 int  SectionID=0,i=0;
 
-struct data
-{
-	char GPS_time[20];         //UTC时间
-	char GPS_sv[20];           //定位是否有效
-	char GPS_wd[12];           //纬度
-	char GPS_jd[12];           //经度
-	char GPS_speed[5];         //速度
-	char GPS_azimuth[20];	   //方位角
-	char GPS_date[8];          //UTC日期          
-	char GPS_declination[10];  //磁偏角
-	char GPS_mode[10];	   //模式指示
+struct data{
+	int hour;		//UTC时间
+	int minute;
+	int second; 
+	int year;		//UTC日期
+	int month;
+	int day;
+	char check[20];         //定位是否有效
+	char latitude[12];      //纬度
+	char longitude[12];     //经度
 
-}GPS_DATA;
+}GPS;
 
 //设置串口
 int set_com_config(int fd,int baud_rate,int data_bits,char parity,int stop_bits)
@@ -160,26 +159,9 @@ int set_com_config(int fd,int baud_rate,int data_bits,char parity,int stop_bits)
 }
 
 //打开串口函数
-int open_port(int com_port)
+int open_port(void)
 {
 	int fd;
-#if 0
-#if (COM_TYPE == GNR_COM)  //使用普通串口
-	char* dev[] = {"/dev/ttyS0","/dev/ttyS1","/dev/ttyS2"};
-#else//使用USB转串口
-	char* dev[] = {"/dev/ttyUSB0","/dev/ttyUSB1","/dev/ttyUSB2"};
-#endif
-	if((com_port<0)||(com_port > MAX_COM_NUM))
-	{
-		return -1;
-	}
-	//打开串口
-	if((fd=open(dev[com_port-1],O_RDWR|O_NOCTTY|O_NDELAY))<0)
-	{
-		perror("open serial port");
-		return -1;
-	}
-#endif
 	if((fd=open("/dev/ttyUSB0",O_RDWR|O_NOCTTY|O_NDELAY))<0)
 	{
 		perror("open serial port");
@@ -203,44 +185,62 @@ int open_port(int com_port)
 //UTC时间转换为北京时间
 void utc_to_beijing(void)
 {
-	unsigned char temp,hour_shi,hour_ge;
-	temp=(GPS_DATA.GPS_time[0]-'0')*10+(GPS_DATA.GPS_time[1]-'0');
-	if(temp<=16)
-	{
-		temp=temp+8;
-		hour_shi=temp/10;
-		hour_ge=temp%10;
-		GPS_DATA.GPS_time[0]=hour_shi+'0';
-		GPS_DATA.GPS_time[1]=hour_ge+'0';	
+	GPS.hour += 8;
+	if(GPS.hour > 23){
+		GPS.hour -= 24;
+		GPS.day ++;
+		switch(GPS.month){
+			case 2: if((GPS.year%4==0&&GPS.year%100!=0)||GPS.year%400==0){
+					if(GPS.day < 30)
+						break;
+				}
+				else{
+					if(GPS.day <29)
+						break;
+				}
+			case 4:
+			case 6:
+			case 9:
+			case 11: if(GPS.day<31)
+				 	break;
+			case 1:
+			case 3:
+			case 5:
+			case 7:
+			case 8:
+			case 10:
+			case 12: if(GPS.day < 32){
+				 	break;
+				 }
+			default:
+				 	GPS.day = 1;
+					GPS.month++;
+
+		}
+		if(GPS.month > 12){
+			GPS.month = 1;
+			GPS.year++;
+		}
 	}
-	else
-	{
-		temp=temp+8-24;
-		GPS_DATA.GPS_time[0]='0';
-		GPS_DATA.GPS_time[1]=temp%10+'0';	
-	}
+
 }
 
 //往屏幕上打印解析后的信息
 void print_info(void)
 {
 	//打印选择界面，即引导的字符号
-	printf("Now the receive time is: %s\n",GPS_DATA.GPS_time);
-	//	printf("The star is %c 3\n",GPS_DATA.GPS_sv);
-	printf("The state is: 		 %s\n",GPS_DATA.GPS_sv);
-	printf("The earth latitude is:   %s\n",GPS_DATA.GPS_wd);
-	printf("The earth longitude is:  %s\n",GPS_DATA.GPS_jd);	
-	printf("The train speed is: 	 %s\n",(GPS_DATA.GPS_speed));
-	printf("The azimuth is: 	 %s\n",(GPS_DATA.GPS_azimuth));
-	printf("The date is:		 %s\n",GPS_DATA.GPS_date);
-	printf("The declination is:	 %s\n",GPS_DATA.GPS_declination);
-	printf("The mode is:		 %s\n",GPS_DATA.GPS_mode);
+	printf("Now the receive Beijing time is: %d/%d/%d %d:%d:%d\n",GPS.year,GPS.month,GPS.day,GPS.hour,GPS.minute,GPS.second);
+	printf("The state is: 		 %s\n",GPS.check);
+	printf("The earth latitude is:   %s\n",GPS.latitude);
+	printf("The earth longitude is:  %s\n",GPS.longitude);	
 }
 
 //提取GPRMC中有用的数据
 void GPS_resolve_GPRMC(char data)
 {
 	//$GPRMC,064851.890,A,2239.4457,N,11400.9571,E,0.68,76.18,270116,,,A*52
+	char temp_time[20];
+	char temp_date[20];
 	if(data==',')
 	{
 		++SectionID;
@@ -251,192 +251,83 @@ void GPS_resolve_GPRMC(char data)
 		switch(SectionID)
 		{
 			case 1:		
-				GPS_DATA.GPS_time[i++]=data;		
-				if(i==2 || i==5)
-				{		
-					GPS_DATA.GPS_time[i++]=':';		
-				}				
-				GPS_DATA.GPS_time[8]='\0';
+				temp_time[i++]=data;		
+				temp_time[6]='\0';
 				break;
 			case 2:
 				if(data=='A')
 				{
-					GPS_DATA.GPS_sv[0]='\0';
-					strcpy(GPS_DATA.GPS_sv,"Effective location");
+					GPS.check[0]='\0';
+					strcpy(GPS.check,"Effective");
 				}
 				else
 				{
-					GPS_DATA.GPS_sv[0]='\0';
-					strcpy(GPS_DATA.GPS_sv,"Invalid location");
+					GPS.check[0]='\0';
+					strcpy(GPS.check,"Invalid");
 				}
 				break;
 			case 3:
-				GPS_DATA.GPS_wd[++i]=data;	
-				GPS_DATA.GPS_wd[12]='\0';					
+				GPS.latitude[++i]=data;	
+				GPS.latitude[12]='\0';					
 				break;
 
 			case 4:
 				if(data=='N')
-					GPS_DATA.GPS_wd[0]='N';
+					GPS.latitude[0]='N';
 				else if(data=='S')
-					GPS_DATA.GPS_wd[0]='S';
-
+					GPS.latitude[0]='S';
 				break;
 			case 5:
 
-				GPS_DATA.GPS_jd[++i]=data;	
-				GPS_DATA.GPS_jd[12]='\0';
+				GPS.longitude[++i]=data;	
+				GPS.longitude[12]='\0';
 				break;
 
 			case 6:
 				if(data=='E')
-					GPS_DATA.GPS_jd[0]='E';
+					GPS.longitude[0]='E';
 				else if(data=='W')
-					GPS_DATA.GPS_jd[0]='W';
-
+					GPS.longitude[0]='W';
 				break;
-			case 7:
-				GPS_DATA.GPS_speed[i++]=data;
-				GPS_DATA.GPS_speed[5]='\0';						
-				break;
-			case 8:
-				GPS_DATA.GPS_azimuth[i++]=data;
-				GPS_DATA.GPS_azimuth[6]='\0';
-				break;
-
 			case 9:
-				GPS_DATA.GPS_date[i++]=data;	
-				if(i==2 || i==5)						
-				{
-					GPS_DATA.GPS_date[i++]='-';
-				}								
-				GPS_DATA.GPS_date[8]='\0';					
-				break;
-			case 10:
-				GPS_DATA.GPS_declination[++i]=data;	
-				GPS_DATA.GPS_declination[4]='\0';	
-				break;
-			case 11:
-				GPS_DATA.GPS_declination[0]=data;	
+				temp_date[i++]=data;	
+				temp_date[6]='\0';					
 				break;
 			case 12:
-				if(data=='A')
-					strcpy(GPS_DATA.GPS_mode,"自主定位");
-				else if(data=='D')
-					strcpy(GPS_DATA.GPS_mode,"差分");
-				else if(data=='E')
-					strcpy(GPS_DATA.GPS_mode,"估算");
-				else
-					strcpy(GPS_DATA.GPS_mode,"数据无效");
+				GPS.hour = (temp_time[0] - '0') * 10 + temp_time[1] - '0';
+				GPS.minute = (temp_time[2] - '0') * 10 + temp_time[3] - '0';
+				GPS.second = (temp_time[4] - '0') * 10 + temp_time[5] - '0';
+				GPS.year = (temp_date[4] - '0') * 10 + temp_date[5] - '0' + 2000;
+				GPS.month = (temp_date[2] - '0') * 10 + temp_date[3] - '0';
+				GPS.day = (temp_date[0] - '0') * 10 + temp_date[1] - '0';
+				break;
 		}
 	}		
 }
 
-#if 0
-//提取GPGGA中有用的数据
-void GPS_resolve_GPGGA(char data)
-{
-	//$GPGGA,064851.890,2239.4457,N,11400.9571,E,1,04,3.9,113.4,M,-2.4,M,,0000*47
-
-	if(data==',')
-	{
-		++SectionID;
-		i=0;
-	}
-	else
-	{
-		switch(SectionID)
-		{
-			case 1:		
-				GPS_DATA.GPS_time[i++]=data;		
-				if(i==2 || i==5)
-				{		
-					GPS_DATA.GPS_time[i++]=':';		
-				}				
-				GPS_DATA.GPS_time[8]='\0';
-				break;
-			case 2:
-				if(data=='A')
-				{
-					GPS_DATA.GPS_sv[0]='\0';
-					strcpy(GPS_DATA.GPS_sv,"Effective location");
-				}
-				else
-				{
-					GPS_DATA.GPS_sv[0]='\0';
-					strcpy(GPS_DATA.GPS_sv,"Invalid location");
-				}
-				break;
-			case 3:
-				GPS_DATA.GPS_wd[++i]=data;	
-				GPS_DATA.GPS_wd[12]='\0';					
-				break;
-
-			case 4:
-				if(data=='N')
-					GPS_DATA.GPS_wd[0]='N';
-				else if(data=='S')
-					GPS_DATA.GPS_wd[0]='S';
-
-				break;
-			case 5:
-
-				GPS_DATA.GPS_jd[++i]=data;	
-				GPS_DATA.GPS_jd[12]='\0';
-				break;
-
-			case 6:
-				if(data=='E')
-					GPS_DATA.GPS_jd[0]='E';
-				else if(data=='W')
-					GPS_DATA.GPS_jd[0]='W';
-
-				break;
-			case 7:
-				GPS_DATA.GPS_speed[i++]=data;
-				GPS_DATA.GPS_speed[5]='\0';						
-				break;
-			case 8:
-				GPS_DATA.GPS_azimuth[i++]=data;
-				GPS_DATA.GPS_azimuth[6]='\0';
-				break;
-
-			case 9:
-				GPS_DATA.GPS_date[i++]=data;	
-				if(i==2 || i==5)						
-				{
-					GPS_DATA.GPS_date[i++]='-';
-				}								
-				GPS_DATA.GPS_date[8]='\0';					
-				break;
-			case 10:
-				GPS_DATA.GPS_declination[++i]=data;	
-				GPS_DATA.GPS_declination[4]='\0';	
-				break;
-			case 11:
-				GPS_DATA.GPS_declination[0]=data;	
-				break;
-			case 12:
-				if(data=='A')
-					strcpy(GPS_DATA.GPS_mode,"自主定位");
-				else if(data=='D')
-					strcpy(GPS_DATA.GPS_mode,"差分");
-				else if(data=='E')
-					strcpy(GPS_DATA.GPS_mode,"估算");
-				else
-					strcpy(GPS_DATA.GPS_mode,"数据无效");
-		}
-	}		
-}
-#endif
-
+//读取数据，并把数据存到数据库
 void read_data(int fd)
 {
+	sqlite3 *db;
+	int ret;
+	char *errmsg;
+	char sql[200] = {'\0'};
+
 	char buffer[BUFF_SIZE],dest[1024]; 	 
 	char array[10]="$GPRMC";
 	int  res,i=0,j=0,k;
 	int  data=1,len=0;
 	memset(dest,0,sizeof(dest));
+	
+	sqlite3_open("./data.db",&db);
+
+	sprintf(sql, "create table if not exists gpsdata(id integer primary key, status varchar(10), latitude varchar(10), longitude varchar(10), time timestamp not null default (datetime('now','localtime')))");
+	ret = sqlite3_exec(db, sql, NULL, NULL, &errmsg);
+	if(SQLITE_OK != ret){
+		printf("create:%s\n", errmsg);
+	        exit(0);
+	}
+
 	do
 	{	 
 		memset(buffer,0,sizeof(buffer));
@@ -449,7 +340,6 @@ void read_data(int fd)
 				i=0;
 				if(strncmp(dest,array,6)==0)
 				{				
-					printf("\n--------------------------------------------------------\n");
 					printf("%s",dest);
 					len=strlen(dest);
 					for(k=0;k<len;k++)
@@ -459,30 +349,41 @@ void read_data(int fd)
 					SectionID=0;
 
 					utc_to_beijing();
-					print_info();
+					print_info(); 		//往屏幕上输出提取的信息
+
+				        sprintf(sql, "insert into gpsdata(status, latitude, longitude) values('%s', '%s', '%s')",GPS.check, GPS.latitude, GPS.longitude);
+				        ret = sqlite3_exec(db, sql, NULL, NULL, &errmsg);
+				        if(SQLITE_OK != ret){
+				                printf("insert:%s\n", errmsg);
+				                exit(0);
+				        }
 				}
 				bzero(dest,sizeof(dest));
 			}
 		}
 	}while(1);
 	close(fd);
+	sqlite3_close(db);
 }
 
 int main(int argc,char*argv[])
 {		
 	int fd=0;	   
-	int HOST_COM_PORT=1;	 
-	fd=open_port(HOST_COM_PORT);
+	fd=open_port();
 	if(fd<0)	
 	{
-		perror("open fail!");
+		perror("open_port fail!");
 	}
 	printf("open sucess!\n");
+
 	if((set_com_config(fd,4800,8,'N',1))<0)	
 	{
 		perror("set_com_config fail!\n");
 	}
+
 	printf("The received worlds are:\n");
 	read_data(fd);
+
 	return 0;
 }
+
