@@ -315,8 +315,7 @@ void read_data(int fd)
 
 	char buffer[BUFF_SIZE],dest[1024]; 	 
 	char array[10]="$GPRMC";
-	int  res,i=0,j=0,k;
-	int  data=1,len=0;
+	int  res,i=0,k,len=0;
 	memset(dest,0,sizeof(dest));
 	
 	sqlite3_open("./data.db",&db);
@@ -332,7 +331,7 @@ void read_data(int fd)
 	{	 
 		memset(buffer,0,sizeof(buffer));
 		//$GPRMC,064851.890,A,2239.4457,N,11400.9571,E,0.68,76.18,270116,,,A*52
-		if(res=read(fd,buffer,1)>0) //每次读一个字符到buffer
+		if((res=read(fd,buffer,1)) > 0) //每次读一个字符到buffer
 		{		
 			strcat(dest,buffer); //把buffer中的那个字符追加到dest
 			if(buffer[0]=='\n') //接收完一句,就进入下面进行处理
